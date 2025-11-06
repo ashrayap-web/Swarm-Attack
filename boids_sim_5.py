@@ -4,20 +4,20 @@ import math
 import sys
 
 # Basic Parameters for Pygame
-WIDTH, HEIGHT = 800, 600
+WIDTH, HEIGHT = 960, 720
 FPS = 60
 
 # Parameters for the Boids Algorithm
-NUMBER_OF_BOIDS = 50
+NUMBER_OF_BOIDS = 350
 MAX_SPEED = 3.0             # max speed of each boid
-MAX_FORCE = 0.1             # max steering force (limit of acceleration)
-PERCEPTION_RADIUS = 50      # this measures how far the boids can see its neighbours
-SEPARATION_RADIUS = 25      # this is the measure of the radius for separation between the boids
+MAX_FORCE = 0.18             # max steering force (limit of acceleration)
+PERCEPTION_RADIUS = 55      # this measures how far the boids can see its neighbours
+SEPARATION_RADIUS = 15      # this is the measure of the radius for separation between the boids
 
 # Rule Weights - we start with separation being the strongest
 SEPARATION_WEIGHT = 1.5     
-ALIGNMENT_WEIGHT = 1.0
-COHESION_WEIGHT = 1.0
+ALIGNMENT_WEIGHT = 0.8
+COHESION_WEIGHT = 0.9
 
 # Setting up Pygame
 pygame.init()
@@ -74,7 +74,7 @@ class Boid:
 
     # Draw the boid - Circle
     def draw(self, surface):
-        pygame.draw.circle(surface, BLUE, self.position, 4)
+        pygame.draw.circle(surface, (0,255,0), self.position, 3)
 
     # Helper method - to calculate the steering force towards the desired velocity
     def steering(self, des_vel):
@@ -192,7 +192,7 @@ while running:
     # Update the Simulation - Boids
     for b in flock:
         b.edge_wrap()      # Handle boundaries
-        b.flock(flock)      # Calculate the forces based on neighbors
+        b.flock(flock)      # Calculate the forces based on neighbours
         b.update()          # Apply the forces and move accordingly
 
     # Drawing - Pygame
