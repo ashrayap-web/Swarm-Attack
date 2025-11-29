@@ -28,7 +28,7 @@ CONFIG = {
     "predatorColor": [255, 50, 50],
     "maxAgentCount": 250,
     "accelerationFactor": 1.0,
-    "environmentalWind": [0.0, 0.0],
+    "movementNoise": 0.05,  # Small random noise added to movement (0.0 = no noise)
     "adaptiveBehaviorEnabled": True,
     "learningRate": 0.05,
     "splitMergeEnabled": True,
@@ -141,9 +141,13 @@ class Agent:
         self.acceleration += force
     
     def update(self):
-        # Apply environmental wind
-        wind = pygame.Vector2(CONFIG["environmentalWind"])
-        self.apply_force(wind)
+        # Add small random noise to simulate natural movement variations
+        if CONFIG["movementNoise"] > 0:
+            noise = pygame.Vector2(
+                random.uniform(-CONFIG["movementNoise"], CONFIG["movementNoise"]),
+                random.uniform(-CONFIG["movementNoise"], CONFIG["movementNoise"])
+            )
+            self.apply_force(noise)
         
         self.velocity += self.acceleration
         if self.velocity.length() > self.max_speed:
@@ -1028,9 +1032,13 @@ class Predator(Agent):
     
     def update(self):
         """Override update to apply realistic turning constraints."""
-        # Apply environmental wind
-        wind = pygame.Vector2(CONFIG["environmentalWind"])
-        self.apply_force(wind)
+        # Add small random noise to simulate natural movement variations
+        if CONFIG["movementNoise"] > 0:
+            noise = pygame.Vector2(
+                random.uniform(-CONFIG["movementNoise"], CONFIG["movementNoise"]),
+                random.uniform(-CONFIG["movementNoise"], CONFIG["movementNoise"])
+            )
+            self.apply_force(noise)
         
         # Calculate desired velocity (normal update)
         desired_velocity = self.velocity + self.acceleration
