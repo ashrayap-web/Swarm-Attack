@@ -466,18 +466,29 @@ class HuntingPack:
             # Use target cluster centroid, or fallback to global centroid
             if self.target_cluster:
                 self.prey_centroid = self.target_cluster.centroid
+                # Calculate average velocity of target cluster
+                self.prey_velocity = pygame.Vector2(0, 0)
+                for fish in self.target_cluster.fish:
+                    self.prey_velocity += fish.velocity
+                self.prey_velocity /= len(self.target_cluster.fish)
             else:
                 # Fallback to global centroid if no valid cluster
                 self.prey_centroid = pygame.Vector2(0, 0)
+                self.prey_velocity = pygame.Vector2(0, 0)
                 for boid in boids:
                     self.prey_centroid += boid.position
+                    self.prey_velocity += boid.velocity
                 self.prey_centroid /= len(boids)
+                self.prey_velocity /= len(boids)
         else:
             # Use global centroid (old behavior)
             self.prey_centroid = pygame.Vector2(0, 0)
+            self.prey_velocity = pygame.Vector2(0, 0)
             for boid in boids:
                 self.prey_centroid += boid.position
+                self.prey_velocity += boid.velocity
             self.prey_centroid /= len(boids)
+            self.prey_velocity /= len(boids)
             self.target_cluster = PreyCluster(boids)
             self.all_clusters = [self.target_cluster]
         
@@ -675,8 +686,9 @@ class Predator(Agent):
             self.previous_direction = 0.0  # Default initial direction
     
     def calculate_prey_centroid(self, boids):
-        """Calculate the centroid of prey within perception radius."""
+        """Calculate the centroid and average velocity of prey within perception radius."""
         center_of_mass = pygame.Vector2(0, 0)
+        avg_velocity = pygame.Vector2(0, 0)
         count = 0
         perception_sq = self.perception * self.perception
         
@@ -684,11 +696,12 @@ class Predator(Agent):
             dist_sq = self.position.distance_squared_to(boid.position)
             if dist_sq < perception_sq:
                 center_of_mass += boid.position
+                avg_velocity += boid.velocity
                 count += 1
         
         if count > 0:
-            return center_of_mass / count, count
-        return None, 0
+            return center_of_mass / count, avg_velocity / count, count
+        return None, pygame.Vector2(0, 0), 0
     
     def calculate_prey_density(self, boids):
         """Calculate the number of prey within perception radius."""
@@ -718,13 +731,59 @@ class Predator(Agent):
         acceleration = centering_force + damping_force
         return acceleration
     
-    def burst_acceleration(self, prey_centroid):
-        """Burst acceleration: a_s = k_b(x_prey_centroid - x_s)"""
+    def calculate_interception(self, target_position, target_velocity):
+        """
+        Calculate interception point for predictive pursuit.
+        Uses closing speed approximation for efficiency during turning.
+        """
+        # Vector to target
+        to_target = target_position - self.position
+        distance = to_target.length()
+        
+        # Handle edge cases
+        if distance < 0.001:
+            return target_position
+        
+        target_speed = target_velocity.length()
+        if target_speed < 0.001:
+            return target_position  # Target is stationary
+        
+        # Calculate relative velocity
+        relative_vel = target_velocity - self.velocity
+        
+        # Calculate closing speed (how fast we're approaching)
+        # Negative dot product means closing in
+        closing_speed = -to_target.dot(relative_vel) / distance
+        
+        # If moving apart or parallel, fallback to direct chase
+        if closing_speed <= 0:
+            return target_position
+        
+        # Estimate time to intercept
+        effective_speed = closing_speed + self.max_speed * 0.5
+        time_to_intercept = distance / effective_speed
+        
+        # Clamp prediction time (max 3 seconds at 60 FPS = 180 frames)
+        time_to_intercept = min(time_to_intercept, 180)
+        
+        # Predict target's future position
+        predicted_position = target_position + (target_velocity * time_to_intercept)
+        
+        return predicted_position
+    
+    def burst_acceleration(self, prey_centroid, prey_velocity=None):
+        """Burst acceleration: a_s = k_b(x_target - x_s) with optional interception"""
         if prey_centroid is None:
             return pygame.Vector2(0, 0)
         
-        # Direct acceleration toward prey centroid
-        direction = prey_centroid - self.position
+        # Use predictive interception if enabled and velocity is available
+        if CONFIG['predatorInterception'] and prey_velocity is not None:
+            target_position = self.calculate_interception(prey_centroid, prey_velocity)
+        else:
+            target_position = prey_centroid
+        
+        # Direct acceleration toward target (predicted or current)
+        direction = target_position - self.position
         acceleration = direction * CONFIG['K_B']
         return acceleration
     
@@ -801,11 +860,12 @@ class Predator(Agent):
         if not boids:
             return caught_boid
         
-        # Calculate prey centroid (local or from pack)
+        # Calculate prey centroid and velocity (local or from pack)
         if hunting_pack and hunting_pack.prey_centroid:
             prey_centroid = hunting_pack.prey_centroid
+            prey_velocity = hunting_pack.prey_velocity if hasattr(hunting_pack, 'prey_velocity') else None
         else:
-            prey_centroid, _ = self.calculate_prey_centroid(boids)
+            prey_centroid, prey_velocity, _ = self.calculate_prey_centroid(boids)
         
         # Apply appropriate acceleration based on state
         if self.state == "herding":
@@ -831,9 +891,9 @@ class Predator(Agent):
             self.apply_force(separation_force)
         
         elif self.state == "burst":
-            # Burst mode: attack prey centroid directly
+            # Burst mode: attack with predictive interception
             if prey_centroid is not None:
-                acceleration = self.burst_acceleration(prey_centroid)
+                acceleration = self.burst_acceleration(prey_centroid, prey_velocity)
                 self.apply_force(acceleration)
         
         # Check for collisions (shark eating fish)
@@ -862,8 +922,8 @@ class Predator(Agent):
         # Update state based on prey density
         self.update_state(boids, current_time)
         
-        # Calculate prey centroid
-        prey_centroid, prey_count = self.calculate_prey_centroid(boids)
+        # Calculate prey centroid and velocity
+        prey_centroid, prey_velocity, prey_count = self.calculate_prey_centroid(boids)
         
         # Apply appropriate acceleration based on state
         if self.state == "herding":
@@ -872,9 +932,9 @@ class Predator(Agent):
                 acceleration = self.herding_acceleration(prey_centroid)
                 self.apply_force(acceleration)
         elif self.state == "burst":
-            # Burst mode: a_s = k_b(x_prey_centroid - x_s)
+            # Burst mode with predictive interception
             if prey_centroid is not None:
-                acceleration = self.burst_acceleration(prey_centroid)
+                acceleration = self.burst_acceleration(prey_centroid, prey_velocity)
                 self.apply_force(acceleration)
         
         # Check for collisions (shark eating fish)
