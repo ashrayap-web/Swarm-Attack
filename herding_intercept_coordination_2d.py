@@ -50,7 +50,7 @@ CONFIG = {
     # Cooperative hunting parameters
     "cooperativeHunting": True,
     "formationRadius": 150,  # Radius for predator positioning around prey
-    "formationQualityThreshold": 0.5,  # How well predators must be positioned (0-1)
+    "formationQualityThreshold": 0.6,  # How well predators must be positioned (0-1)
     "K_FORMATION": 0.15,  # Weight for moving toward assigned formation position
     "K_SEPARATION": 0.05,  # Weight for maintaining distance from other predators
     "minPredatorSeparation": 100,  # Minimum distance between predators
@@ -466,29 +466,18 @@ class HuntingPack:
             # Use target cluster centroid, or fallback to global centroid
             if self.target_cluster:
                 self.prey_centroid = self.target_cluster.centroid
-                # Calculate average velocity of target cluster
-                self.prey_velocity = pygame.Vector2(0, 0)
-                for fish in self.target_cluster.fish:
-                    self.prey_velocity += fish.velocity
-                self.prey_velocity /= len(self.target_cluster.fish)
             else:
                 # Fallback to global centroid if no valid cluster
                 self.prey_centroid = pygame.Vector2(0, 0)
-                self.prey_velocity = pygame.Vector2(0, 0)
                 for boid in boids:
                     self.prey_centroid += boid.position
-                    self.prey_velocity += boid.velocity
                 self.prey_centroid /= len(boids)
-                self.prey_velocity /= len(boids)
         else:
             # Use global centroid (old behavior)
             self.prey_centroid = pygame.Vector2(0, 0)
-            self.prey_velocity = pygame.Vector2(0, 0)
             for boid in boids:
                 self.prey_centroid += boid.position
-                self.prey_velocity += boid.velocity
             self.prey_centroid /= len(boids)
-            self.prey_velocity /= len(boids)
             self.target_cluster = PreyCluster(boids)
             self.all_clusters = [self.target_cluster]
         
@@ -686,9 +675,8 @@ class Predator(Agent):
             self.previous_direction = 0.0  # Default initial direction
     
     def calculate_prey_centroid(self, boids):
-        """Calculate the centroid and average velocity of prey within perception radius."""
+        """Calculate the centroid of prey within perception radius."""
         center_of_mass = pygame.Vector2(0, 0)
-        avg_velocity = pygame.Vector2(0, 0)
         count = 0
         perception_sq = self.perception * self.perception
         
@@ -696,12 +684,11 @@ class Predator(Agent):
             dist_sq = self.position.distance_squared_to(boid.position)
             if dist_sq < perception_sq:
                 center_of_mass += boid.position
-                avg_velocity += boid.velocity
                 count += 1
         
         if count > 0:
-            return center_of_mass / count, avg_velocity / count, count
-        return None, pygame.Vector2(0, 0), 0
+            return center_of_mass / count, count
+        return None, 0
     
     def calculate_prey_density(self, boids):
         """Calculate the number of prey within perception radius."""
@@ -731,61 +718,81 @@ class Predator(Agent):
         acceleration = centering_force + damping_force
         return acceleration
     
-    def calculate_interception(self, target_position, target_velocity):
+    def calculate_interception(self, target):
         """
-        Calculate interception point for predictive pursuit.
-        Uses closing speed approximation for efficiency during turning.
+        Calculate the interception point where predator can catch target.
+        Uses predictive targeting based on target's velocity.
+        
+        Returns the position to aim for (interception point).
         """
-        # Vector to target
-        to_target = target_position - self.position
+        # Get relative position and velocities
+        to_target = target.position - self.position
         distance = to_target.length()
         
-        # Handle edge cases
         if distance < 0.001:
-            return target_position
+            return target.position
         
-        target_speed = target_velocity.length()
+        # Calculate time to intercept
+        target_speed = target.velocity.length()
+        
+        # If target is stationary, aim directly at it
         if target_speed < 0.001:
-            return target_position  # Target is stationary
+            return target.position
         
-        # Calculate relative velocity
-        relative_vel = target_velocity - self.velocity
-        
-        # Calculate closing speed (how fast we're approaching)
-        # Negative dot product means closing in
+        # Calculate the interception time using closing speed approach
+        # Dot product to see if target is moving toward or away from us
+        relative_vel = target.velocity - self.velocity
         closing_speed = -to_target.dot(relative_vel) / distance
         
-        # If moving apart or parallel, fallback to direct chase
+        # If moving apart or very slow closing, use simple chase
         if closing_speed <= 0:
-            return target_position
+            return target.position
         
-        # Estimate time to intercept
-        effective_speed = closing_speed + self.max_speed * 0.5
-        time_to_intercept = distance / effective_speed
+        # Estimate interception time
+        time_to_intercept = distance / (closing_speed + self.max_speed)
         
-        # Clamp prediction time (max 3 seconds at 60 FPS = 180 frames)
-        time_to_intercept = min(time_to_intercept, 180)
+        # Clamp time to reasonable values (max 3 seconds of prediction)
+        time_to_intercept = min(time_to_intercept, 180)  # 3 seconds at 60 FPS
         
-        # Predict target's future position
-        predicted_position = target_position + (target_velocity * time_to_intercept)
+        # Calculate where target will be
+        predicted_position = target.position + (target.velocity * time_to_intercept)
         
         return predicted_position
     
-    def burst_acceleration(self, prey_centroid, prey_velocity=None):
-        """Burst acceleration: a_s = k_b(x_target - x_s) with optional interception"""
+    def burst_acceleration(self, prey_centroid):
+        """Burst acceleration: a_s = k_b(x_prey_centroid - x_s)"""
         if prey_centroid is None:
             return pygame.Vector2(0, 0)
         
-        # Use predictive interception if enabled and velocity is available
-        if CONFIG['predatorInterception'] and prey_velocity is not None:
-            target_position = self.calculate_interception(prey_centroid, prey_velocity)
-        else:
-            target_position = prey_centroid
-        
-        # Direct acceleration toward target (predicted or current)
-        direction = target_position - self.position
+        # Direct acceleration toward prey centroid
+        direction = prey_centroid - self.position
         acceleration = direction * CONFIG['K_B']
         return acceleration
+    
+    def burst_interception(self, boids):
+        """
+        Burst with predictive interception: target closest prey and predict its position.
+        Returns acceleration vector toward interception point.
+        """
+        if not boids:
+            return pygame.Vector2(0, 0)
+        
+        # Find closest prey
+        closest_prey = min(boids, key=lambda b: self.position.distance_to(b.position))
+        
+        # Use interception if enabled, otherwise direct pursuit
+        if CONFIG["predatorInterception"]:
+            target_pos = self.calculate_interception(closest_prey)
+        else:
+            target_pos = closest_prey.position
+        
+        # Calculate acceleration toward interception point
+        direction = target_pos - self.position
+        if direction.length() > 0.001:
+            acceleration = direction * CONFIG['K_B']
+            return acceleration
+        
+        return pygame.Vector2(0, 0)
     
     def constrain_turning(self, desired_velocity):
         """Constrain velocity direction change based on current speed for realistic movement."""
@@ -860,12 +867,11 @@ class Predator(Agent):
         if not boids:
             return caught_boid
         
-        # Calculate prey centroid and velocity (local or from pack)
+        # Calculate prey centroid (local or from pack)
         if hunting_pack and hunting_pack.prey_centroid:
             prey_centroid = hunting_pack.prey_centroid
-            prey_velocity = hunting_pack.prey_velocity if hasattr(hunting_pack, 'prey_velocity') else None
         else:
-            prey_centroid, prey_velocity, _ = self.calculate_prey_centroid(boids)
+            prey_centroid, _ = self.calculate_prey_centroid(boids)
         
         # Apply appropriate acceleration based on state
         if self.state == "herding":
@@ -891,10 +897,9 @@ class Predator(Agent):
             self.apply_force(separation_force)
         
         elif self.state == "burst":
-            # Burst mode: attack with predictive interception
-            if prey_centroid is not None:
-                acceleration = self.burst_acceleration(prey_centroid, prey_velocity)
-                self.apply_force(acceleration)
+            # Burst mode: intercept closest prey
+            acceleration = self.burst_interception(boids)
+            self.apply_force(acceleration)
         
         # Check for collisions (shark eating fish)
         for boid in boids:
@@ -922,8 +927,8 @@ class Predator(Agent):
         # Update state based on prey density
         self.update_state(boids, current_time)
         
-        # Calculate prey centroid and velocity
-        prey_centroid, prey_velocity, prey_count = self.calculate_prey_centroid(boids)
+        # Calculate prey centroid
+        prey_centroid, prey_count = self.calculate_prey_centroid(boids)
         
         # Apply appropriate acceleration based on state
         if self.state == "herding":
@@ -932,10 +937,9 @@ class Predator(Agent):
                 acceleration = self.herding_acceleration(prey_centroid)
                 self.apply_force(acceleration)
         elif self.state == "burst":
-            # Burst mode with predictive interception
-            if prey_centroid is not None:
-                acceleration = self.burst_acceleration(prey_centroid, prey_velocity)
-                self.apply_force(acceleration)
+            # Burst mode: intercept closest prey
+            acceleration = self.burst_interception(boids)
+            self.apply_force(acceleration)
         
         # Check for collisions (shark eating fish)
         for boid in boids:
@@ -1054,7 +1058,7 @@ class Predator(Agent):
         if self.catch_flash > 0:
             self.catch_flash -= 1
     
-    def draw(self, surface, debug_mode=False, formation_pos=None):
+    def draw(self, surface, debug_mode=False, formation_pos=None, boids=None):
         # Draw larger and brighter when catching prey
         if self.catch_flash > 0:
             radius = 6 + int(self.catch_flash * 0.6)  # Grow up to 15 pixels
@@ -1075,10 +1079,25 @@ class Predator(Agent):
             pygame.draw.circle(surface, (100, 50, 50), (int(self.position.x), int(self.position.y)), 
                              int(self.perception), 1)
             
-            # Show formation target position
-            if formation_pos:
+            # Show formation target position during herding
+            if formation_pos and self.state == "herding":
                 pygame.draw.circle(surface, (255, 255, 0), (int(formation_pos.x), int(formation_pos.y)), 5, 2)
                 pygame.draw.line(surface, (255, 255, 0), self.position, formation_pos, 1)
+            
+            # Show interception point during burst
+            if self.state == "burst" and boids and CONFIG["predatorInterception"]:
+                closest_prey = min(boids, key=lambda b: self.position.distance_to(b.position))
+                intercept_pos = self.calculate_interception(closest_prey)
+                # Draw line from predator to predicted interception point
+                pygame.draw.line(surface, (255, 150, 0), self.position, intercept_pos, 2)
+                # Draw X at interception point
+                size = 5
+                pygame.draw.line(surface, (255, 200, 0), 
+                               (intercept_pos.x - size, intercept_pos.y - size),
+                               (intercept_pos.x + size, intercept_pos.y + size), 2)
+                pygame.draw.line(surface, (255, 200, 0),
+                               (intercept_pos.x + size, intercept_pos.y - size),
+                               (intercept_pos.x - size, intercept_pos.y + size), 2)
 
 # ==================== SIMULATION CLASS ====================
 class Simulation:
@@ -1241,7 +1260,7 @@ class Simulation:
             formation_pos = None
             if self.hunting_pack and debug_mode >= 2:
                 formation_pos = self.hunting_pack.get_formation_position(predator)
-            predator.draw(self.screen, debug_mode, formation_pos)
+            predator.draw(self.screen, debug_mode, formation_pos, self.boids)
         
         # Draw stats
         self._draw_stats()
