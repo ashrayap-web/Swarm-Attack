@@ -1,0 +1,10 @@
+# Core dependencies
+pygame>=2.5.0
+
+# Optional: For benchmarking and video recording
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# Optional: For plotting results
+matplotlib>=3.7.0
+
