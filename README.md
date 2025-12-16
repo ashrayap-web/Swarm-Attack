@@ -64,8 +64,8 @@ python -m src.main
 | Key | Action |
 |-----|--------|
 | `ESC` | Quit simulation |
-| `G` | Toggle grid visualization |
-| `V` | Cycle visualization modes (normal → grid → debug) |
+| `G` | Toggle grid visualisation |
+| `V` | Cycle visualisation modes (normal → grid → debug) |
 | `C` | Toggle cooperative hunting ON/OFF |
 | `L` | Toggle smart clustering ON/OFF |
 | `T` | Cycle target strategy (nearest → largest → densest) |
